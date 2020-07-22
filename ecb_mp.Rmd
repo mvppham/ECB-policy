@@ -1,0 +1,374 @@
+---
+title: The effects of (un)conventional monetary policy on the euro area
+output: rmarkdown::github_document
+---
+
+We want to take a look at the IRFs (Impulse Response Functions) to compare the effects of conventional and unconventional monetary policy of the ECB. The former is represented by the Main Refinancing Rate whereas the latter is represented by the balance sheet of the ECB. The effects are supposed to be shown on the variables real GPD, inflation and the STOXX 50 volatility index. Time period is selected to be from January 2000 until February 2018. So we have enough crisis as well as non-crisis years.
+
+## Import libraries
+```{r echo=TRUE, results='hide', error=FALSE, message=FALSE, warning=FALSE}
+library(zoo)
+library(xts)
+library(RiverLoad)
+library(vars)
+library(tseries)
+library(aTSA)
+library(xtable)
+library(dynlm)
+library(car)
+library(ggplot2)
+library(gridExtra)
+```
+
+## Import datasets
+
+**Main Refinancing Rate (MRR)**
+```{r}
+mrr <- read.csv('BBK01.SU0202.csv', header = TRUE, sep = ',')
+head(mrr, 10)
+```
+
+**ECB balance sheet**
+```{r}
+assets <- read.csv('ECBASSETS.csv', header = TRUE, sep = ',')
+head(assets)
+```
+
+**Real GDP**
+```{r}
+gdp <- read.csv('CLVMEURSCAB1GQEA19.csv', header = TRUE, sep = ',')
+head(gdp)
+```
+
+**Inflation**
+```{r}
+inf <- read.csv('DP_LIVE_21102019152317061.csv', header = TRUE, sep = ',')
+head(inf)
+```
+
+**VSTOXX**
+```{r}
+stoxx50 <- read.csv('stoxx.csv', header = TRUE, sep = ';')
+head(stoxx50)
+```
+
+## Adjusting datasets
+We have to adjust the datasets to obtain monthly data in the period from January 2000 until February 2018. Real GDP is available as quarterly data. So we have to apply interpolation in this case. The STOXX 50 variable on the other hand is based on daily data. We take the mean of each month in that case. The inflation dataset contains the inflation data on every country in Europe. However, we only need the inflation data of the 19 countries in the euro area.
+
+**MRR**
+```{r}
+mrr <- mrr[17:234, c('X', 'BBK01.SU0202')]
+colnames(mrr) <- c('Time', 'MRR')
+```
+
+**Assets**
+```{r}
+colnames(assets) <- c('Date', 'Assets')
+assets <- assets[14:231,]
+```
+
+**Real GDP**
+```{r}
+colnames(gdp) <- c('Date', 'GDP')
+gdp$Date <- as.Date(gdp$Date)
+gdp$quarter <- as.yearqtr(gdp$Date, format = "%Y%q")
+
+monthly = seq(gdp$Date[1], tail(gdp$Date,1), by="month")
+realGDP2 = data.frame(qvar=monthly, gdp2=spline(gdp, method="fmm", xout=monthly)$y)
+colnames(realGDP2) <- c('Date', 'rGDP')
+
+gdp <- realGDP2[61:278,]
+```
+
+**Inflation**
+```{r}
+inf <- subset(inf, inf == 'EA19')
+inf <- inf[1:218, c('TIME', 'Value')]
+```
+
+**VSTOXX**
+```{r}
+StoxxDate <- as.Date(stoxx50$Date, format = '%d.%m.%y')
+stoxx <- data.frame(StoxxDate, stoxx50$Indexvalue)
+
+stoxx$stoxx50.Indexvalue <- as.numeric(stoxx$stoxx50.Indexvalue)
+                                       
+colnames(stoxx) <- c('datetime', 'flow')
+stoxx <- monthly.year.mean(stoxx)
+
+colnames(stoxx) <- c('Date', 'IndexValue')
+
+NewDate <- format(stoxx$Date, '%Y-%m')
+stoxx <- data.frame(NewDate, stoxx$IndexValue)
+colnames(stoxx) <- c('Date', 'IndexValue')
+vstoxx <- stoxx[13:230,]
+```
+
+### Converting to Time Series format
+```{r}
+mrr <- ts(mrr$MRR, start = 2000, frequency = 12)
+assets <- ts(assets$Assets, start = 2000, frequency = 12)
+gdp <- ts(gdp$rGDP, start = 2000, frequency = 12)
+inf <- ts(inf$Value, start = 2000, frequency = 12)
+vstoxx <- ts(vstoxx$IndexValue, start = 2000, frequency = 12)
+```
+
+## Analysis
+We are using a Vector Autoregressive Model for our purpose whose results we do not want to interpret directly but with the use of Impulse Response Functions. With IRFs we can examine the effects of an unit shock in the size of one standard deviation of the respective error term while holding all other shocks constant. We need to make sure that we use (weakly) stationary time series in our model. Stationarity refers to the characteristic that the distribution function of a process does not change by a shift in time. Economic time series often include a deterministic trend which need to be removed to obtain stationary time series. When detrending one time series, it is advisable to detrend all time series in the model for interpretation reasons. Also, we take the logarithmic values of GDP and assets because of their magnitude.
+
+**Taking the logarithm**
+```{r}
+log_assets <- log(assets)
+log_gdp <- log(gdp)
+```
+
+**Detrending linearly**
+```{r}
+trend_mrr <- lm(mrr ~ c(1:length(mrr)))
+detrend_mrr <- resid(trend_mrr)
+
+trend_log_assets <- lm(log_assets ~ c(1:length(log_assets)))
+detrend_log_assets <- resid(trend_log_assets)
+
+trend_log_gdp <- lm(log_gdp ~ c(1:length(log_gdp)))
+detrend_log_gdp <- resid(trend_log_gdp)
+
+trend_inf <- lm(inf ~ c(1:length(inf)))
+detrend_inf <- resid(trend_inf)
+
+trend_vstoxx <- lm(vstoxx ~ c(1:length(vstoxx)))
+detrend_vstoxx <- resid(trend_vstoxx)
+```
+
+**Stationary testing**
+```{r}
+VARselect(detrend_log_gdp, lag.max = 12)
+VARselect(detrend_inf, lag.max = 12)
+VARselect(detrend_mrr, lag.max = 12)
+VARselect(detrend_log_assets, lag.max = 12)
+VARselect(detrend_vstoxx, lag.max = 12)
+```
+We look at the information criteria in order to assign an appropriate lag order to the respective time series.
+
+```{r}
+adf.test(detrend_log_gdp, nlag = 12)
+adf.test(detrend_inf, nlag = 12)
+adf.test(detrend_mrr, nlag = 12)
+adf.test(detrend_log_assets, nlag = 12)
+adf.test(detrend_vstoxx, nlag = 12)
+```
+Almost every detrended variable is significant in either one of the models of type 1 or 2 at one suggested lag order at least. Having ensured stationarity, we can build the model now.
+
+**VAR model**
+```{r}
+varmodel <- cbind(detrend_log_gdp, detrend_inf, detrend_mrr, detrend_log_assets, detrend_vstoxx)
+```
+The order of the variables in this model is relevant. We assume that real GDP is not instantaneously reactive to all other variables. Inflation is similar, but less exogenous than GDP. It is conventional in economic literature that GDP and inflation only react with a delay. The MRR and the balance sheet size are monetary policy tools that are used to react to an economic situation and therefore are placed after GDP and inflation. VSTOXX is put in the last place since volatility is rather a reflection of an economy than the driver of it.
+We use Ljung Box tests to test for autocorrelation. We want a model as simple as possible but without any autocorrelation.
+
+```{r}
+VARselect(varmodel, lag.max = 12, type = 'const')
+```
+The information criteria suggest 3, 4 or 8 lags.
+
+```{r}
+var_3 <- VAR(varmodel, p = 3)
+resid_var_3 <- resid(var_3)
+Box.test(resid_var_3[,1], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_3[,2], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_3[,3], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_3[,4], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_3[,5], lag = 12, type = 'Ljung-Box')
+```
+3 out of 5 time series show indication of autocorrelation.
+
+```{r}
+var_4 <- VAR(varmodel, p = 4)
+resid_var_4 <- resid(var_4)
+Box.test(resid_var_4[,1], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_4[,2], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_4[,3], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_4[,4], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_4[,5], lag = 12, type = 'Ljung-Box')
+```
+Again, 3 out of 5.
+
+```{r}
+var_8 <- VAR(varmodel, p = 8)
+resid_var_8 <- resid(var_8)
+Box.test(resid_var_8[,1], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_8[,2], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_8[,3], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_8[,4], lag = 12, type = 'Ljung-Box')
+Box.test(resid_var_8[,5], lag = 12, type = 'Ljung-Box')
+```
+Now, only inflation reveals autocorrelation. Based on that, we proceed with the model of lag order 8.
+
+**Impulse Response Functions**
+```{r}
+irf_1 <- irf(var_8, impulse = 'detrend_mrr', response = 'detrend_log_gdp', n.ahead = 48, ci = 0.68, runs = 500)
+irf_2 <- irf(var_8, impulse = 'detrend_mrr', response = 'detrend_inf', n.ahead = 48, ci = 0.68, runs = 500)
+irf_3 <- irf(var_8, impulse = 'detrend_mrr', response = 'detrend_mrr', n.ahead = 48, ci = 0.68, runs = 500)
+irf_4 <- irf(var_8, impulse = 'detrend_mrr', response = 'detrend_vstoxx', n.ahead = 48, ci = 0.68, runs = 500)
+
+irf_5 <- irf(var_8, impulse = 'detrend_log_assets', response = 'detrend_log_gdp', n.ahead = 48, ci = 0.68, runs = 500)
+irf_6 <- irf(var_8, impulse = 'detrend_log_assets', response = 'detrend_inf', n.ahead = 48, ci = 0.68, runs = 500)
+irf_7 <- irf(var_8, impulse = 'detrend_log_assets', response = 'detrend_log_assets', n.ahead = 48, ci = 0.68, runs = 500)
+irf_8 <- irf(var_8, impulse = 'detrend_log_assets', response = 'detrend_vstoxx', n.ahead = 48, ci = 0.68, runs = 500)
+```
+Since in IRFs the default impulses are positive, we need to adjust accordingly to obtain negative impulses as reducing MRR is generally a tool that is used in times of economic turbulences.
+
+**MRR -> real GPD**
+```{r}
+irf_mrr_gdp_irf <- irf_1$irf$detrend_mrr/-1
+irf_mrr_gdp_lower <- irf_1$Lower$detrend_mrr/-1
+irf_mrr_gdp_upper <- irf_1$Upper$detrend_mrr/-1
+irf_mrr_gdp <- cbind(irf_mrr_gdp_irf, irf_mrr_gdp_lower, irf_mrr_gdp_upper)
+irf_mrr_gdp <- as.data.frame(irf_mrr_gdp)
+
+colnames(irf_mrr_gdp) <- c('d_log_rGDP1', 'd_log_rGDP2', 'd_log_rGDP3')
+
+mrr_gdp <- ggplot(data=irf_mrr_gdp) +
+                geom_line(mapping = aes(x = 1:nrow(irf_mrr_gdp), y=irf_mrr_gdp$d_log_rGDP1)) +
+                geom_line(linetype = "dashed", mapping = aes(x = 1:nrow(irf_mrr_gdp), 
+                                                             y=irf_mrr_gdp$d_log_rGDP2)) +
+                geom_line(linetype = "dashed", mapping = aes(x = 1:nrow(irf_mrr_gdp), 
+                                                             y=irf_mrr_gdp$d_log_rGDP3)) +
+                ggtitle("IR of detrend_log_gdp to negative detrend_mrr shock (CI 68%)") +
+                xlab("") +
+                ylab("")
+```
+
+**MRR -> Inflation**
+```{r}
+irf_mrr_inf_irf <- irf_2$irf$detrend_mrr/-1
+irf_mrr_inf_lower <- irf_2$Lower$detrend_mrr/-1
+irf_mrr_inf_upper <- irf_2$Upper$detrend_mrr/-1
+irf_mrr_inf <- cbind(irf_mrr_inf_irf, irf_mrr_inf_lower, irf_mrr_inf_upper)
+irf_mrr_inf <- as.data.frame(irf_mrr_inf)
+
+colnames(irf_mrr_inf) <- c('detrend_inf1', 'detrend_inf2', 'detrend_inf3')
+
+mrr_inf <- ggplot(data = irf_mrr_inf) +
+                geom_line(mapping = aes(x= 1:nrow(irf_mrr_inf), y=irf_mrr_inf_irf)) +
+                geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_mrr_inf), y=irf_mrr_inf_lower)) +
+                geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_mrr_inf), y=irf_mrr_inf_upper)) +
+                ggtitle("IR of detrend_inflation to negative detrend_mrr shock (CI 68%)") +
+                xlab("") +
+                ylab("")
+```
+
+**MRR -> MRR**
+```{r}
+irf_mrr_mrr_irf <- irf_3$irf$detrend_mrr/-1
+irf_mrr_mrr_irf_lower <- irf_3$Lower$detrend_mrr/-1
+irf_mrr_mrr_irf_upper <- irf_3$Upper$detrend_mrr/-1
+irf_mrr_mrr <- cbind(irf_mrr_mrr_irf, irf_mrr_mrr_irf_lower, irf_mrr_mrr_irf_upper)
+irf_mrr_mrr <- as.data.frame(irf_mrr_mrr)
+
+colnames(irf_mrr_mrr) <- c('detrend_mrr1', 'detrend_mrr2', 'detrend_mrr3')
+
+mrr_mrr <- ggplot(data = irf_mrr_mrr) +
+                geom_line(mapping = aes(x=1:nrow(irf_mrr_mrr), y=detrend_mrr1)) +
+                geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_mrr_mrr), y=detrend_mrr2)) +
+                geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_mrr_mrr), y=detrend_mrr3)) +
+                ggtitle("IR of detrend_mrr to negative detrend_mrr shock (CI 68%)") +
+                xlab("") +
+                ylab("")
+```
+
+**MRR -> VSTOXX**
+```{r}
+irf_mrr_vstoxx_irf <- irf_4$irf$detrend_mrr/-1
+irf_mrr_vstoxx_lower <- irf_4$Lower$detrend_mrr/-1
+irf_mrr_vstoxx_upper <- irf_4$Upper$detrend_mrr/-1
+irf_mrr_vstoxx <- cbind(irf_mrr_vstoxx_irf, irf_mrr_vstoxx_lower, irf_mrr_vstoxx_upper)
+irf_mrr_vstoxx <- as.data.frame(irf_mrr_vstoxx)
+
+colnames(irf_mrr_vstoxx) <- c('detrend_vstoxx1', 'detrend_vstoxx2', 'detrend_vstoxx3')
+
+mrr_vstoxx <- ggplot(data = irf_mrr_vstoxx) +
+                  geom_line(mapping = aes(x=1:nrow(irf_mrr_vstoxx), y=detrend_vstoxx1)) +
+                  geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_mrr_vstoxx_lower), y=detrend_vstoxx2)) +
+                  geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_mrr_vstoxx), y=detrend_vstoxx3)) +
+                  ggtitle("IR of detrend_vstoxx to negative detrend_mrr shock (CI 68%)") +
+                  xlab("") +
+                  ylab("")
+```
+
+Putting the 4 graphs together.
+```{r, warning=FALSE}
+grid.arrange(mrr_gdp, mrr_inf, mrr_mrr, mrr_vstoxx, ncol=2)
+```
+<br/>
+The responses decline towards zero which indicates a stationary VAR system. The MRR shock is approximately -0.111 which corresponds to -11 basis points. Responses of MRR to negative shocks of MRR are negative at the beginning obviously (at -0.11) and move towards zero in month 13. Until around month 10, the effect is significant within a confidence interval of one standard deviation. After month 13, MRR becomes positive with its peak at 0.06 in month 25 approximately until it slowly decays to zero again. Positive effects from month 17 to month 32 are significant. Responses of real GDP and inflation are zero at the beginning due to Cholesky ordering. Real GDP reacts positively to the negative MRR shock. From month 4 to month 34, the effect is significant at the 32% level peaking in month 19 at around 0.003. That means that a decrease of MRR residuals by 11 basis points leads to a 0.3% increase of the (detrended) real GDP in 19 months. After that, the effect converges to zero but does not reach it until the end of the considered period of 48 months. The effect on inflation is not significant until month 12. In the months from 13 to 26, it is positive and within the 68% confidence interval. It reaches its highest point at 0.07 in month 21. The lower right graph in figure 3 shows the effect on the VSTOXX. The response is significant between month 3 until month 16. In that period, the effect reaches a low point of -1.5.
+
+**Assets -> real GDP**
+```{r}
+irf_assets_gdp <- cbind(irf_5$irf$detrend_log_assets, irf_5$Lower$detrend_log_assets, irf_5$Upper$detrend_log_assets)
+irf_assets_gdp <- as.data.frame(irf_assets_gdp)
+colnames(irf_assets_gdp) <- c('detrend_log_rGDP1', 'detrend_log_rGDP2', 'detrend_log_rGDP3')
+
+assets_gdp <- ggplot(data = irf_assets_gdp) +
+                    geom_line(mapping = aes(x=1:nrow(irf_assets_gdp), y=detrend_log_rGDP1)) +
+                    geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_gdp), y=detrend_log_rGDP2)) +
+                    geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_gdp), y=detrend_log_rGDP3)) +
+                    ggtitle("IR of detrend_log_rGDP to positive detrend_log_assets shock (CI 68%)") +
+                    xlab("") +
+                    ylab("")
+```
+
+**Assets -> Inflation**
+```{r}
+irf_assets_inf <- cbind(irf_6$irf$detrend_log_assets, irf_6$Lower$detrend_log_assets, irf_6$Upper$detrend_log_assets)
+irf_assets_inf <- as.data.frame(irf_assets_inf)
+colnames(irf_assets_inf) <- c('detrend_inf1', 'detrend_inf2', 'detrend_inf3')
+
+assets_inf <- ggplot(data = irf_assets_inf) +
+                    geom_line(mapping = aes(x=1:nrow(irf_assets_inf), y=detrend_inf1)) +
+                    geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_inf), y=detrend_inf2)) +
+                    geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_inf), y=detrend_inf3)) +
+                    ggtitle("IR of detrend_inf to positive detrend_log_assets shock (CI 68%)") +
+                    xlab("") +
+                    ylab("")
+```
+
+**Assets -> assets**
+```{r}
+irf_assets_assets <- cbind(irf_7$irf$detrend_log_assets, irf_7$Lower$detrend_log_assets, irf_7$Upper$detrend_log_assets)
+irf_assets_assets <- as.data.frame(irf_assets_assets)
+colnames(irf_assets_assets) <- c('detrend_log_assets1', 'detrend_log_assets2', 'detrend_log_assets3')
+
+assets_assets <- ggplot(data = irf_assets_assets) +
+                      geom_line(mapping = aes(x=1:nrow(irf_assets_assets), y=detrend_log_assets1)) +
+                      geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_assets), y=detrend_log_assets2)) +
+                      geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_assets), y=detrend_log_assets3)) +
+                      ggtitle("IR of detrend_log_assets to positive detrend_log_assets shock (CI 68%)") +
+                      xlab("") +
+                      ylab("")
+```
+
+**Assets -> VSTOXX**
+```{r}
+irf_assets_vstoxx <- cbind(irf_8$irf$detrend_log_assets, irf_8$Lower$detrend_log_assets, irf_8$Upper$detrend_log_assets)
+irf_assets_vstoxx <- as.data.frame(irf_assets_vstoxx)
+colnames(irf_assets_vstoxx) <- c('detrend_vstoxx1', 'detrend_vstoxx2', 'detrend_vstoxx3')
+
+assets_vstoxx <- ggplot(data = irf_assets_vstoxx) +
+                      geom_line(mapping = aes(x=1:nrow(irf_assets_vstoxx), y=detrend_vstoxx1)) +
+                      geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_vstoxx), y=detrend_vstoxx2)) +
+                      geom_line(linetype="dashed", mapping = aes(x=1:nrow(irf_assets_vstoxx), y=detrend_vstoxx3)) +
+                      ggtitle("IR of detrend_vstoxx to positive detrend_log_assets shock (CI 68%)") +
+                      xlab("") +
+                      ylab("")
+```
+
+Putting graphs together.
+```{r, warning=FALSE}
+grid.arrange(assets_gdp, assets_inf, assets_assets, assets_vstoxx, ncol=2)  
+```
+<br/>
+In the case of asset shocks, effects are positive (in terms of solicited) but turn negative after a certain time. Assets start at 0.032 (shock size) and slowly decline towards zero until month 38. The effect is significant until month 22 based on the 68% confidence interval. In the beginning, real GDP turns slightly negative. After month 7, the responses are positive and significant until month 21. The peak amounts to roughly 0.0017 in month 18. However, the effect becomes negative. It is significant from month 34 until month 47. The lowest point can be found in month 42 at around -0.0016. Similarly, the impact on inflation has a positive and a negative part. It is positive and significant from month 10 until month 27. The highest point has a value of 0.14 in month 19. Between month 34 and 47, the effect is negative and significant. The lowest point has a value of -0.075 in month 42. Significant effects regarding inflation are based on a confidence interval of 68%. Compared to the effects on real GDP and inflation, the effect on VSTOXX is reversed, consisting of a negative and a positive part. The response is different from zero initially because of the Cholesky ordering. The period from month 6 to 17 has a negative and significant effect. In month 8, the uncertainty of the stock market STOXX is the lowest at -0.8. As opposed to that, the period from month 25 to 38 is characterized by a positive and significant effect with the highest point in month 33 at 0.6.
+
+## Conclusion
+To sum up, conventional monetary policy in the form of MRR has an intuitive impact in this model. An unexpected lower MRR leads to better condition for credit institutions to borrow money. The cheaper money eventually is transmitted to the real economy which causes an increase of GDP and inflation and as a result of this, the uncertainty of the stock market decreases. Regarding unconventional monetary policy, measures only have a positive impact temporarily before they start to be a burden for the economy.
